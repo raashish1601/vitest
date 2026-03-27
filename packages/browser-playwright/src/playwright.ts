@@ -260,8 +260,8 @@ export class PlaywrightBrowserProvider implements BrowserProvider {
   }
 
   private createMocker(): BrowserModuleMocker {
-    const idPredicates = new Map<string, (url: URL) => boolean>()
-    const sessionIds = new Map<string, string[]>()
+    const idPredicates = new Map<string, Array<(url: URL) => boolean>>()
+    const sessionIds = new Map<string, Set<string>>()
 
     function createPredicate(sessionId: string, url: string) {
       const moduleUrl = new URL(url, 'http://localhost')
@@ -293,15 +293,32 @@ export class PlaywrightBrowserProvider implements BrowserProvider {
 
         return true
       }
-      const ids = sessionIds.get(sessionId) || []
-      ids.push(moduleUrl.href)
+      const ids = sessionIds.get(sessionId) || new Set<string>()
+      ids.add(moduleUrl.href)
       sessionIds.set(sessionId, ids)
-      idPredicates.set(predicateKey(sessionId, moduleUrl.href), predicate)
+
+      const key = predicateKey(sessionId, moduleUrl.href)
+      const predicates = idPredicates.get(key) || []
+      predicates.push(predicate)
+      idPredicates.set(key, predicates)
+
       return predicate
     }
 
     function predicateKey(sessionId: string, url: string) {
       return `${sessionId}:${url}`
+    }
+
+    async function unroutePredicates(page: Page, sessionId: string, id: string): Promise<void> {
+      const key = predicateKey(sessionId, id)
+      const predicates = idPredicates.get(key)
+      if (!predicates?.length) {
+        return
+      }
+
+      await Promise.all(
+        predicates.map(predicate => page.context().unroute(predicate)),
+      ).finally(() => idPredicates.delete(key))
     }
 
     return {
@@ -373,23 +390,12 @@ export class PlaywrightBrowserProvider implements BrowserProvider {
       },
       delete: async (sessionId: string, id: string): Promise<void> => {
         const page = this.getPage(sessionId)
-        const key = predicateKey(sessionId, id)
-        const predicate = idPredicates.get(key)
-        if (predicate) {
-          await page.context().unroute(predicate).finally(() => idPredicates.delete(key))
-        }
+        await unroutePredicates(page, sessionId, id)
       },
       clear: async (sessionId: string): Promise<void> => {
         const page = this.getPage(sessionId)
-        const ids = sessionIds.get(sessionId) || []
-        const promises = ids.map((id) => {
-          const key = predicateKey(sessionId, id)
-          const predicate = idPredicates.get(key)
-          if (predicate) {
-            return page.context().unroute(predicate).finally(() => idPredicates.delete(key))
-          }
-          return null
-        })
+        const ids = sessionIds.get(sessionId) || new Set<string>()
+        const promises = Array.from(ids, id => unroutePredicates(page, sessionId, id))
         await Promise.all(promises).finally(() => sessionIds.delete(sessionId))
       },
     }
