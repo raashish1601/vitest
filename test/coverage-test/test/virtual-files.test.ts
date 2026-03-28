@@ -39,3 +39,28 @@ test('virtual files should be excluded', async () => {
     }
   `)
 })
+
+test('uncovered ts files that import virtual modules are transformed before coverage parsing', async () => {
+  const { stderr } = await runVitest({
+    include: ['fixtures/test/virtual-files-fixture.test.ts'],
+    coverage: {
+      reporter: 'json',
+      include: ['fixtures/src/virtual-files-uncovered.ts'],
+    },
+    config: 'fixtures/configs/vitest.config.virtual-files.ts',
+  }, {
+    throwOnError: false,
+  })
+
+  expect(stderr).toBe('')
+
+  const coverageMap = await readCoverageMap()
+  const files = coverageMap.files()
+
+  expect(files).toEqual([
+    '<process-cwd>/fixtures/src/virtual-files-uncovered.ts',
+  ])
+
+  const fileCoverage = coverageMap.fileCoverageFor('<process-cwd>/fixtures/src/virtual-files-uncovered.ts')
+  expect(fileCoverage.toSummary().lines.pct).toBe(0)
+})

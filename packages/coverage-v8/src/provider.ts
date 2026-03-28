@@ -3,6 +3,8 @@ import type { ProxifiedModule } from 'magicast'
 import type { Profiler } from 'node:inspector'
 import type { CoverageProvider, ReportContext, TestProject, Vite, Vitest } from 'vitest/node'
 import { existsSync, promises as fs } from 'node:fs'
+import module from 'node:module'
+import { extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 // @ts-expect-error -- untyped
 import { mergeProcessCovs } from '@bcoe/v8-coverage'
@@ -25,6 +27,8 @@ export interface ScriptCoverageWithOffset extends Profiler.ScriptCoverage {
 interface RawCoverage { result: ScriptCoverageWithOffset[] }
 
 const FILE_PROTOCOL = 'file://'
+const shouldTransformTypes = process.execArgv.includes('--experimental-transform-types')
+  || process.env.NODE_OPTIONS?.includes('--experimental-transform-types')
 
 const debug = createDebug('vitest:coverage')
 
@@ -357,7 +361,7 @@ export class V8CoverageProvider extends BaseCoverageProvider implements Coverage
         return '/'.repeat(length)
       })
 
-      return { code: original }
+      return { code: stripTypeScriptTypes(original, filePath) }
     }
 
     // Vue needs special handling for "map.sources"
@@ -480,4 +484,22 @@ function removeStartsWith(filepath: string, start: string) {
   }
 
   return filepath
+}
+
+function stripTypeScriptTypes(code: string, filepath: string): string {
+  const extension = extname(filepath.split('?')[0])
+  const isTypeScript = extension === '.ts' || extension === '.cts' || extension === '.mts'
+
+  if (!isTypeScript || !module.stripTypeScriptTypes) {
+    return code
+  }
+
+  try {
+    return module.stripTypeScriptTypes(code, {
+      mode: shouldTransformTypes ? 'transform' : 'strip',
+    })
+  }
+  catch {
+    return code
+  }
 }
